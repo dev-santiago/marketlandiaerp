@@ -1,5 +1,4 @@
 const zlib = require('zlib');
-const { Pool } = require('pg');
 
 const LIMITE_DESCOMPRIMIDO = 100 * 1024 * 1024;
 
@@ -17,29 +16,53 @@ function acharUrl() {
   throw new Error('Nenhuma variável de conexão do banco encontrada. Variáveis parecidas que existem: ' + (candidatas.join(', ') || 'nenhuma') + '. Conecte o banco ao projeto (Storage > Connect Project) e faça um Redeploy.');
 }
 
-let pool = null;
+let driver = null;
 let origem = null;
 
-function getPool() {
-  if (pool) return pool;
-  const achada = acharUrl();
-  origem = achada.nome;
-  const u = new URL(achada.url);
-  u.searchParams.delete('sslmode');
-  u.searchParams.delete('channel_binding');
-  const local = /^(localhost|127\.0\.0\.1)$/.test(u.hostname);
-  pool = new Pool({
-    connectionString: u.toString(),
-    ssl: local ? false : { rejectUnauthorized: false },
-    max: 3,
-    idleTimeoutMillis: 5000,
-    connectionTimeoutMillis: 15000
-  });
-  pool.on('error', err => console.error('Erro no pool do banco:', err));
-  return pool;
+function criarDriver(url) {
+  let pgMod = null;
+  try { pgMod = require('pg'); } catch (e) {}
+  if (pgMod) {
+    const u = new URL(url);
+    u.searchParams.delete('sslmode');
+    u.searchParams.delete('channel_binding');
+    const local = /^(localhost|127\.0\.0\.1)$/.test(u.hostname);
+    const pool = new pgMod.Pool({
+      connectionString: u.toString(),
+      ssl: local ? false : { rejectUnauthorized: false },
+      max: 3,
+      idleTimeoutMillis: 5000,
+      connectionTimeoutMillis: 15000
+    });
+    pool.on('error', err => console.error('Erro no pool do banco:', err));
+    return {
+      tipo: 'pg',
+      rodar: async (texto, valores) => (await pool.query(texto, valores)).rows,
+      rodarVarios: async lista => { await pool.query(lista.join(';\n')); }
+    };
+  }
+  let neonMod = null;
+  try { neonMod = require('@neondatabase/serverless'); } catch (e) {}
+  if (neonMod) {
+    const sql = neonMod.neon(url);
+    return {
+      tipo: 'neon',
+      rodar: async (texto, valores) => sql.query(texto, valores || []),
+      rodarVarios: async lista => { for (const comando of lista) await sql.query(comando); }
+    };
+  }
+  throw new Error('Nenhum pacote de banco instalado. Coloque "pg": "^8.13.0" nas dependências do package.json do GitHub e faça um novo deploy.');
 }
 
-const consultar = async (texto, valores) => (await getPool().query(texto, valores)).rows;
+function getDriver() {
+  if (driver) return driver;
+  const achada = acharUrl();
+  origem = achada.nome;
+  driver = criarDriver(achada.url);
+  return driver;
+}
+
+const consultar = async (texto, valores) => getDriver().rodar(texto, valores);
 
 const DDL_BASE = `CREATE TABLE IF NOT EXISTS store (
   id integer PRIMARY KEY,
@@ -49,27 +72,27 @@ const DDL_BASE = `CREATE TABLE IF NOT EXISTS store (
   updated_at timestamptz NOT NULL DEFAULT now()
 )`;
 
-const DDL_ESPELHO = `SELECT pg_advisory_xact_lock(727000);
-CREATE TABLE IF NOT EXISTS usuarios (
+const DDL_ESPELHO = [
+  `CREATE TABLE IF NOT EXISTS usuarios (
       id text PRIMARY KEY, nome text, email text, senha_hash text, role text, pct double precision, ativo integer
-    );
-CREATE TABLE IF NOT EXISTS clientes (
+    )`,
+  `CREATE TABLE IF NOT EXISTS clientes (
       id text PRIMARY KEY, cod_sis text, tipo text, nome text, fantasia text, doc text, ie text, email text, tel text,
       log text, num text, bairro text, cid text, uf text, cep text, vend text, ativo integer
-    );
-CREATE TABLE IF NOT EXISTS produtos (
+    )`,
+  `CREATE TABLE IF NOT EXISTS produtos (
       id text PRIMARY KEY, cod_int text, sku text, nome text, un text, custo double precision, preco double precision,
       est double precision, cat text, marca text, ativo integer
-    );
-CREATE TABLE IF NOT EXISTS orcamentos (
+    )`,
+  `CREATE TABLE IF NOT EXISTS orcamentos (
       id text PRIMARY KEY, n text, cli text, vend text, vend_nome text, data bigint, frete double precision,
       parc bigint, st text, ped text, itens jsonb
-    );
-CREATE TABLE IF NOT EXISTS pedidos (
+    )`,
+  `CREATE TABLE IF NOT EXISTS pedidos (
       id text PRIMARY KEY, n text, orc text, cli text, vend text, vend_nome text, data bigint, frete double precision,
       parc bigint, st text, itens jsonb
-    );
-CREATE OR REPLACE FUNCTION ml_num(t text) RETURNS double precision LANGUAGE plpgsql IMMUTABLE AS $$
+    )`,
+  `CREATE OR REPLACE FUNCTION ml_num(t text) RETURNS double precision LANGUAGE plpgsql IMMUTABLE AS $$
     DECLARE r double precision;
     BEGIN
       r := t::double precision;
@@ -80,8 +103,8 @@ CREATE OR REPLACE FUNCTION ml_num(t text) RETURNS double precision LANGUAGE plpg
     EXCEPTION WHEN OTHERS THEN
       RETURN NULL;
     END
-    $$;
-CREATE OR REPLACE FUNCTION ml_int(t text) RETURNS bigint LANGUAGE plpgsql IMMUTABLE AS $$
+    $$`,
+  `CREATE OR REPLACE FUNCTION ml_int(t text) RETURNS bigint LANGUAGE plpgsql IMMUTABLE AS $$
     DECLARE r double precision;
     BEGIN
       r := ml_num(t);
@@ -90,14 +113,14 @@ CREATE OR REPLACE FUNCTION ml_int(t text) RETURNS bigint LANGUAGE plpgsql IMMUTA
       END IF;
       RETURN round(r)::bigint;
     END
-    $$;
-CREATE OR REPLACE FUNCTION ml_flag(v jsonb) RETURNS integer LANGUAGE sql IMMUTABLE AS $$
+    $$`,
+  `CREATE OR REPLACE FUNCTION ml_flag(v jsonb) RETURNS integer LANGUAGE sql IMMUTABLE AS $$
       SELECT CASE WHEN v IN ('0'::jsonb, 'false'::jsonb, '"0"'::jsonb) THEN 0 ELSE 1 END
-    $$;
-CREATE OR REPLACE FUNCTION ml_arr(d jsonb, k text) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+    $$`,
+  `CREATE OR REPLACE FUNCTION ml_arr(d jsonb, k text) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
       SELECT CASE WHEN jsonb_typeof(d -> k) = 'array' THEN d -> k ELSE '[]'::jsonb END
-    $$;
-CREATE OR REPLACE FUNCTION ml_refresh_mirror() RETURNS void LANGUAGE plpgsql AS $$
+    $$`,
+  `CREATE OR REPLACE FUNCTION ml_refresh_mirror() RETURNS void LANGUAGE plpgsql AS $$
     DECLARE v_doc jsonb;
     BEGIN
       PERFORM pg_advisory_xact_lock(727001);
@@ -159,7 +182,8 @@ CREATE OR REPLACE FUNCTION ml_refresh_mirror() RETURNS void LANGUAGE plpgsql AS 
       WHERE jsonb_typeof(x.j) = 'object' AND COALESCE(x.j ->> 'id', '') <> ''
       ORDER BY x.j ->> 'id';
     END
-    $$;`;
+    $$`
+];
 
 let base = null;
 let espelho = null;
@@ -174,7 +198,7 @@ function prepararEspelho() {
   if (espelho) return espelho;
   espelho = (async () => {
     try {
-      await consultar(DDL_ESPELHO);
+      await getDriver().rodarVarios(['SELECT pg_advisory_xact_lock(727000)', ...DDL_ESPELHO]);
       espelhoErro = null;
       return true;
     } catch (err) {
@@ -290,6 +314,7 @@ async function saude(req, res) {
     ok: true,
     banco: 'conectado',
     variavel_usada: origem,
+    pacote: getDriver().tipo,
     gravado: reg
       ? { versao: reg.rev, usuarios: reg.users_count, atualizado_em: reg.updated_at, tamanho_kb: Math.round(reg.bytes / 1024) }
       : 'ainda sem dados (normal antes do primeiro acesso)',
