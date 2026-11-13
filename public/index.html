@@ -2152,7 +2152,7 @@
       }
     }
 
-    @media (max-width: 700px) {
+    @media (max-width: 860px) {
       main { padding: 18px 14px 56px; }
 
       /* indicadores em 2 colunas */
@@ -2238,7 +2238,7 @@
       .table-wrapper td[data-label^="AÇ"] button, .table-wrapper td[data-label^="Aç"] button { flex: 1 1 auto; min-height: 44px; justify-content: center; }
     }
 
-    @media (max-width: 700px) {
+    @media (max-width: 860px) {
       .table-wrapper td .cv { flex: 1 1 auto; min-width: 0; text-align: right; }
       .table-wrapper td:first-child .cv,
       .table-wrapper td[data-label^="AÇ"] .cv,
@@ -2247,7 +2247,7 @@
       .table-wrapper td[data-label^="AÇ"] .cv, .table-wrapper td[data-label^="Aç"] .cv { text-align: left; }
     }
 
-    @media (max-width: 700px) {
+    @media (max-width: 860px) {
       .sheet-bar-info { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
       .sheet-bar-info strong { margin: 0; }
       .sheet-bar-info::after {
@@ -2266,6 +2266,50 @@
       .sheet-bar.open .sheet-bar-actions { margin-top: 12px; }
       .sheet-bar-actions button:nth-child(2):last-child { grid-column: 1 / -1; }
     }
+
+    /* ---------- Celular simples: nada de arrastar para o lado ---------- */
+    html { overflow-x: hidden; }
+    body { max-width: 100%; overscroll-behavior-x: none; }
+    .shell, .workspace, main { min-width: 0; }
+    main { overflow-wrap: break-word; }
+    img, svg { max-width: 100%; }
+
+    @media (max-width: 860px) {
+      main { padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px)); }
+      .page-head { flex-wrap: wrap; gap: 10px; }
+
+      #modal-container { overflow-x: hidden; }
+      #modal-container > div { max-width: 100%; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+      #modal-container [style*="overflow:auto"],
+      #modal-container [style*="overflow: auto"] { overflow-x: hidden !important; }
+
+      #modal-container :not(.table-wrapper) > table { font-size: 12px; table-layout: auto; }
+      #modal-container :not(.table-wrapper) > table th,
+      #modal-container :not(.table-wrapper) > table td { padding: 6px 4px; white-space: normal; word-break: break-word; }
+
+      #modal-container [style*="display:flex"] { flex-wrap: wrap; }
+      #modal-container [style*="display:flex"] > button { flex: 1 1 140px; justify-content: center; }
+      #modal-container input[style*="width:"],
+      #modal-container select[style*="width:"],
+      main input[style*="width:"] { max-width: 100%; }
+      .table-wrapper td input[style*="width"] { width: 100% !important; max-width: 160px; }
+    }
+
+    @media (max-width: 640px) {
+      main [style*="grid-template-columns"]:not(.cards) { grid-template-columns: 1fr !important; }
+    }
+
+    @media (max-width: 700px) {
+      #print-overlay { padding: 0 8px 28px; }
+      .print-toolbar { padding: 10px 12px; border-radius: 0 0 12px 12px; margin-bottom: 12px; }
+      .print-toolbar > div:first-child span { display: none; }
+      .print-toolbar > div:last-child { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+      .print-toolbar button { min-height: 42px; justify-content: center; }
+    }
+
+    @media print {
+      .print-sheet { zoom: 1 !important; }
+    }
   </style>
 </head>
 <body>
@@ -2281,6 +2325,7 @@
   <input type="file" id="cost-file-input" accept=".xlsx,.xls" style="display:none" onchange="handleCostUpload(event)">
   <input type="file" id="order-cost-file-input" accept=".xlsx,.xls" style="display:none" onchange="handleOrderCostUpload(event)">
   <input type="file" id="price-file-input" accept=".xlsx,.xls" style="display:none" onchange="handlePriceUpload(event)">
+  <input type="file" id="order-pdf-input" accept="application/pdf,.pdf" multiple style="display:none" onchange="handleOrderPdfUpload(event)">
   <input type="file" id="photo-file-input" accept="image/*" style="display:none" onchange="handlePhotoUpload(event)">
 
   <script>
@@ -2510,32 +2555,79 @@
     const addAuditLog = action => database.audit.unshift({ t: Date.now(), u: currentUser ? currentUser.nome : 'Sistema', a: action });
 
     const SESSION_KEY = 'marketlandia_session';
-    const saveSession = () => {
+    const SESSION_MAX_MS = 24 * 60 * 60 * 1000;
+    let sessionStart = 0;
+    let sessionExpiredOnLoad = false;
+
+    const readSession = () => {
+      try {
+        const raw = localStorage.getItem(SESSION_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) { return null; }
+    };
+    const sessionIsExpired = s => {
+      const t = Number(s && s.t);
+      if (!Number.isFinite(t) || t <= 0) return true;
+      const age = Date.now() - t;
+      return age >= SESSION_MAX_MS || age < -5 * 60 * 1000;
+    };
+    const saveSession = (fresh = false) => {
       try {
         if (!currentUser) return;
+        const prev = fresh ? null : readSession();
+        if (!fresh && (!prev || prev.uid !== currentUser.id || sessionIsExpired(prev))) return;
+        const t = fresh ? Date.now() : prev.t;
+        if (fresh) sessionStart = t;
         localStorage.setItem(SESSION_KEY, JSON.stringify({
           uid: currentUser.id,
+          t,
           page: activePage === 'pagar' ? 'receber' : activePage
         }));
       } catch (e) {}
     };
     const clearSession = () => {
+      sessionStart = 0;
       try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
     };
     const restoreSession = () => {
       try {
-        const raw = localStorage.getItem(SESSION_KEY);
-        if (!raw) return;
-        const saved = JSON.parse(raw);
-        const user = saved && database.users.find(u => u.id === saved.uid && u.ativo);
+        const saved = readSession();
+        if (!saved) return;
+        const user = database.users.find(u => u.id === saved.uid && u.ativo);
         if (!user) {
           if (database.users.length) clearSession();
           return;
         }
+        if (sessionIsExpired(saved)) {
+          clearSession();
+          sessionExpiredOnLoad = true;
+          return;
+        }
         currentUser = user;
+        sessionStart = Number(saved.t);
         if (saved.page && saved.page !== 'pagar' && PAGES[saved.page]) activePage = saved.page;
       } catch (e) {}
     };
+
+    function enforceSessionExpiry() {
+      if (!currentUser) return;
+      const memExpired = !sessionStart || Date.now() - sessionStart >= SESSION_MAX_MS;
+      const stored = readSession();
+      const storeExpired = stored ? sessionIsExpired(stored) : false;
+      if (!memExpired && !storeExpired) return;
+
+      addAuditLog('Sessão encerrada automaticamente (limite de 24 horas)');
+      saveData();
+      clearSession();
+      paymentDraft = null;
+      draftOrder = null;
+      closeModal();
+      const po = getEl('print-overlay');
+      if (po) po.style.display = 'none';
+      currentUser = null;
+      renderApp();
+      showToast('Por segurança, o login vale por 24 horas. Entre novamente.');
+    }
 
     const isAdmin = () => currentUser?.role === 'admin';
     const isManager = () => currentUser?.role !== 'vendedor';
@@ -2879,7 +2971,7 @@
 
       currentUser = user;
       activePage = 'prod';
-      saveSession();
+      saveSession(true);
       addAuditLog(`Login realizado (${user.role.toUpperCase()}: ${user.nome})`);
       await saveData();
       renderApp();
@@ -2982,7 +3074,7 @@
     document.addEventListener('keydown', e => { if (e.key === 'Escape') toggleNav(false); });
     document.addEventListener('click', e => {
       const info = e.target.closest && e.target.closest('.sheet-bar-info');
-      if (info && window.matchMedia('(max-width: 700px)').matches) info.parentElement.classList.toggle('open');
+      if (info && window.matchMedia('(max-width: 860px)').matches) info.parentElement.classList.toggle('open');
     });
     window.addEventListener('resize', () => { if (window.innerWidth > 860) toggleNav(false); });
 
@@ -4613,7 +4705,7 @@
       },
 
       orc() {
-        return renderHeader('VENDAS', 'ORÇAMENTOS', 'openQuoteForm()') +
+        return renderHeader('VENDAS', 'ORÇAMENTOS', 'openQuoteForm()') + pdfImportBar('orc') +
           renderTable(['ORÇAMENTO', 'DATA', 'CLIENTE', 'ITENS (CÓD. / METROS / UN)', 'VENDEDOR', 'VALOR', 'STATUS', 'AÇÕES'],
             filterByOwnership(database.orc).slice().reverse().map(o => [
               `<span class="num-serif">${o.n}</span><span class="sub-status">${escapeHtml(o.st)}</span>`,
@@ -4635,7 +4727,7 @@
       },
 
       ped() {
-        return renderHeader('VENDAS', 'PEDIDO', 'openQuoteForm()') +
+        return renderHeader('VENDAS', 'PEDIDO', 'openQuoteForm()') + pdfImportBar('ped') +
           renderTable(['PEDIDO', 'DATAS', 'CLIENTE / VENDEDOR', 'ITENS / METRAGEM', 'VALOR', 'AÇÕES'],
             filterByOwnership(database.ped).slice().reverse().map(p => {
               const done = p.st === 'Faturado';
@@ -7163,6 +7255,7 @@
       `;
 
       overlay.style.display = 'flex';
+      fitPrintSheet();
     }
 
     let printPrevTitle = null;
@@ -7539,6 +7632,525 @@
       showToast(`Usuário ${removed.nome} excluído com sucesso!`);
     }
 
+    const PDF_LETTER = { a: '[aáàâãä]', c: '[cç]', e: '[eéèêë]', i: '[iíìî]', o: '[oóòôõö]', u: '[uúùûü]' };
+    const pdfLabel = word => word.split('').map(ch => {
+      if (ch === ' ') return '\\s*';
+      return PDF_LETTER[ch.toLowerCase()] || ch.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
+    }).join('\\s*');
+    const pdfSquash = s => normText(s).replace(/[^a-z0-9]/g, '').toUpperCase();
+    const pdfBR = s => {
+      const n = parseFloat(String(s ?? '').replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.'));
+      return isFinite(n) ? n : 0;
+    };
+    const pdfDateIso = s => {
+      const m = String(s || '').replace(/\s/g, '').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+      return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
+    };
+    const PDF_MONEY = '(\\d{1,3}(?:\\.\\d{3})*,\\d{2,4}|\\d+,\\d{2,4})';
+    const PDF_ITEM_RE = new RegExp(
+      '^([A-Za-z0-9][A-Za-z0-9._\\-/]*)\\s+(.+?)\\s+([A-Za-zÀ-ÿ.]+)\\s+(\\d{1,3}(?:\\.\\d{3})*,\\d{1,4}|\\d+,\\d{1,4})' +
+      '\\s+(?:R\\$\\s*)?' + PDF_MONEY + '\\s+(?:R\\$\\s*)?' + PDF_MONEY + '\\s+(?:R\\$\\s*)?' + PDF_MONEY + '\\s*$'
+    );
+
+    function pdfMapPayMethod(desc) {
+      const s = pdfSquash(desc);
+      if (s.includes('PIX')) return 'PIX';
+      if (s.includes('BOLETO')) return 'BOLETO';
+      if (s.includes('DINHEIRO')) return 'DINHEIRO';
+      if (s.includes('CHEQUE')) return 'CHEQUE';
+      if (s.includes('CREDITO')) return 'CARTÃO DE CRÉDITO';
+      if (s.includes('DEBITO')) return 'CARTÃO DE DÉBITO';
+      if (s.includes('TRANSFER')) return 'TRANSFERÊNCIA';
+      if (s.includes('CARTEIRA') || s.includes('PRAZO')) return 'A PRAZO / CARTEIRA';
+      return '';
+    }
+
+    function parseOrderPdfLines(rawLines) {
+      const lines = rawLines.map(l => String(l).replace(/\s+/g, ' ').trim()).filter(Boolean);
+      const text = lines.join('\n');
+      const squashed = pdfSquash(text);
+      const doc = {
+        titulo: squashed.includes('ORCAMENTODEVENDA') ? 'ORCAMENTO' : squashed.includes('PEDIDODEVENDA') ? 'PEDIDO' : '',
+        numero: '', vendedor: '', cliente: '', fantasia: '', telefone: '',
+        criacao: '', entrega: '', end: { log: '', num: '', bairro: '', cep: '', cid: '', uf: '' },
+        itens: [], totalItens: null, desconto: 0, frete: 0, outros: 0, totalPdf: null,
+        pagamentos: [], obs: ''
+      };
+
+      const grab = (label, tail = '([^\\n]*)') => {
+        const m = text.match(new RegExp(pdfLabel(label) + '\\s*:\\s*' + tail, 'i'));
+        return m ? m[1].trim() : '';
+      };
+
+      doc.numero = grab('Pedido', '(\\d+)') || grab('Orcamento', '(\\d+)');
+      doc.vendedor = grab('Vendedor');
+      const cli = grab('Cliente');
+      const cm = cli.match(/^(.*?)\s*\((.*)\)\s*$/);
+      doc.cliente = (cm ? cm[1] : cli).trim();
+      doc.fantasia = cm && pdfSquash(cm[2]) !== pdfSquash(cm[1]) ? cm[2].trim() : '';
+      doc.telefone = grab('Telefone');
+
+      const dateAfter = label => {
+        const m = text.match(new RegExp(pdfLabel(label) + '\\s*:[^\\n]*?(\\d{2}/\\d{2}/\\d{4})', 'i'));
+        return m ? pdfDateIso(m[1]) : '';
+      };
+      doc.criacao = dateAfter('Data de criacao');
+      doc.entrega = dateAfter('Data de entrega');
+
+      const addrStart = text.search(new RegExp(pdfLabel('Endereco de cobranca'), 'i'));
+      if (addrStart >= 0) {
+        let seg = text.slice(addrStart);
+        const cut = seg.search(new RegExp(pdfLabel('Endereco de entrega') + '|' + pdfLabel('Itens do'), 'i'));
+        if (cut > 0) seg = seg.slice(0, cut);
+        const pick = (label, next) => {
+          const m = seg.match(new RegExp(pdfLabel(label) + '\\s*:\\s*(.*?)\\s*(?:' + next + ')', 'i'));
+          return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+        };
+        doc.end.log = pick('Endereco', pdfLabel('Numero') + '\\s*:');
+        const nm = seg.match(new RegExp(pdfLabel('Numero') + '\\s*:\\s*([^\\n]*)', 'i'));
+        doc.end.num = nm ? nm[1].trim() : '';
+        doc.end.bairro = pick('Bairro', pdfLabel('CEP') + '\\s*:');
+        doc.end.cep = pick('CEP', pdfLabel('Cidade') + '\\s*:').replace(/\s/g, '');
+        doc.end.cid = pick('Cidade', pdfLabel('Estado') + '\\s*:');
+        const um = seg.match(new RegExp(pdfLabel('Estado') + '\\s*:\\s*([A-Za-z]{2})', 'i'));
+        doc.end.uf = um ? um[1].toUpperCase() : '';
+      }
+
+      let from = lines.findIndex(l => pdfSquash(l).includes('ITENSDO'));
+      if (from < 0) from = 0;
+      let to = lines.findIndex((l, i) => i > from && /QUANTIDADEDEITENS|VALORTOTALDEPEDIDO|VALORTOTALDOSITENS/.test(pdfSquash(l)));
+      if (to < 0) to = lines.length;
+      let buf = '';
+      let tries = 0;
+      for (let i = from + 1; i < to; i++) {
+        if (/^REFERENCIA/.test(pdfSquash(lines[i]))) { buf = ''; tries = 0; continue; }
+        let m = lines[i].match(PDF_ITEM_RE);
+        if (m) buf = '';
+        else {
+          buf = buf ? buf + ' ' + lines[i] : lines[i];
+          m = buf.match(PDF_ITEM_RE);
+        }
+        if (m) {
+          doc.itens.push({
+            sku: m[1].toUpperCase(), desc: m[2].trim(), un: m[3], q: pdfBR(m[4]),
+            pu: pdfBR(m[5]), desc_r: pdfBR(m[6]), total: pdfBR(m[7])
+          });
+          buf = ''; tries = 0;
+        } else if (++tries > 4) {
+          buf = ''; tries = 0;
+        }
+      }
+
+      const ti = lines.findIndex(l => { const s = pdfSquash(l); return s.includes('TOTALDOSITENS') && s.includes('FRETE'); });
+      if (ti >= 0) {
+        for (let k = ti + 1; k <= ti + 3 && k < lines.length; k++) {
+          const vals = [...lines[k].matchAll(/R\$\s*(\d[\d.]*,\d{2})/g)].map(x => pdfBR(x[1]));
+          if (vals.length >= 4) {
+            doc.totalItens = vals[0]; doc.desconto = vals[1]; doc.frete = vals[2]; doc.outros = vals[3];
+            if (vals.length >= 5) doc.totalPdf = vals[4];
+            break;
+          }
+        }
+      }
+
+      const pi = lines.findIndex(l => pdfSquash(l).includes('FORMACONDICOESDEPAGAMENTO'));
+      if (pi >= 0) {
+        for (let k = pi + 1; k < lines.length; k++) {
+          const sq = lines[k].replace(/\s+/g, '');
+          if (/^OBSERVA/i.test(pdfSquash(lines[k]))) break;
+          const m = sq.match(/^(.*?)\[(\d+)\/(\d+)\](\d{2}\/\d{2}\/\d{4})(?:(\d{2}\/\d{2}\/\d{4}))?(\d{1,3}(?:\.\d{3})*,\d{2})/);
+          if (m) {
+            doc.pagamentos.push({ desc: m[1], idx: Number(m[2]), parc: Number(m[3]), venc: pdfDateIso(m[4]), valor: pdfBR(m[6]) });
+          }
+        }
+      }
+
+      if (doc.totalPdf === null && doc.pagamentos.length) doc.totalPdf = Math.round(doc.pagamentos.reduce((a, p) => a + p.valor, 0) * 100) / 100;
+
+      const oi = lines.findIndex(l => pdfSquash(l) === 'OBSERVACOES');
+      if (oi >= 0) {
+        const parts = [];
+        for (let k = oi + 1; k < lines.length; k++) {
+          if (/^ASSINATURA/.test(pdfSquash(lines[k]))) break;
+          if (/^Pedido\s*:\s*\d+$/i.test(lines[k]) || /^EMITIDO/i.test(lines[k])) continue;
+          parts.push(lines[k]);
+        }
+        doc.obs = parts.join(' ').trim();
+      }
+
+      return doc;
+    }
+
+    let pdfJsPromise = null;
+    function loadPdfJs() {
+      if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+      if (pdfJsPromise) return pdfJsPromise;
+      pdfJsPromise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        s.onload = () => {
+          try {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            resolve(window.pdfjsLib);
+          } catch (e) { pdfJsPromise = null; reject(e); }
+        };
+        s.onerror = () => { pdfJsPromise = null; reject(new Error('Não consegui carregar o leitor de PDF. Verifique a internet e tente de novo.')); };
+        document.head.appendChild(s);
+      });
+      return pdfJsPromise;
+    }
+
+    async function pdfToLines(file) {
+      const pdfjs = await loadPdfJs();
+      const pdf = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+      const out = [];
+      for (let p = 1; p <= pdf.numPages; p++) {
+        const content = await (await pdf.getPage(p)).getTextContent();
+        const rows = [];
+        content.items.forEach(it => {
+          if (!it.str || !it.str.trim()) return;
+          const x = it.transform[4], y = it.transform[5];
+          let row = rows.find(r => Math.abs(r.y - y) <= 3);
+          if (!row) { row = { y, parts: [] }; rows.push(row); }
+          row.parts.push({ x, w: it.width || 0, s: it.str, h: Math.abs(it.transform[3]) || 8 });
+        });
+        rows.sort((a, b) => b.y - a.y).forEach(r => {
+          r.parts.sort((a, b) => a.x - b.x);
+          let line = '';
+          let prev = null;
+          r.parts.forEach(pt => {
+            if (prev && pt.x - (prev.x + prev.w) > pt.h * 0.18) line += ' ';
+            line += pt.s;
+            prev = pt;
+          });
+          out.push(line);
+        });
+        out.push('');
+      }
+      return out;
+    }
+
+    let pdfImportQueue = [];
+    let pdfImportDoc = null;
+    let pdfImportTarget = 'orc';
+
+    function pdfImportBar(target) {
+      return `
+        <div class="sheet-bar">
+          <div class="sheet-bar-info">
+            <strong>${icon('sheet')} Importar do PDF (modelo Pedido de Venda)</strong>
+            <small>Lê número, cliente, itens, desconto, frete e pagamento do PDF e cria o ${target === 'ped' ? 'pedido' : 'orçamento'}. Você confere tudo antes de salvar. Pode escolher vários PDFs de uma vez.</small>
+          </div>
+          <div class="sheet-bar-actions">
+            <button onclick="triggerOrderPdfUpload('${target}')">${icon('download')} Importar PDF</button>
+          </div>
+        </div>`;
+    }
+
+    function triggerOrderPdfUpload(target) {
+      pdfImportTarget = target === 'ped' ? 'ped' : 'orc';
+      const input = getEl('order-pdf-input');
+      if (input) { input.value = ''; input.click(); }
+    }
+
+    async function handleOrderPdfUpload(event) {
+      const files = Array.from(event.target.files || []);
+      if (!files.length) return;
+      pdfImportQueue = files;
+      showToast('Lendo o PDF…');
+      await nextPdfImport();
+    }
+
+    const pdfNorm = s => normText(s).replace(/[^a-z0-9]+/g, ' ').trim();
+
+    function pdfPayInfo(doc) {
+      const pays = doc.pagamentos;
+      if (!pays.length) return { forma: '', parc: 1, termo: 'À Vista' };
+      const main = pays.slice().sort((a, b) => b.valor - a.valor)[0];
+      const same = pays.filter(p => p.desc === main.desc);
+      const first = same.slice().sort((a, b) => a.idx - b.idx)[0];
+      let termo = 'À Vista';
+      if (!pdfSquash(main.desc).includes('AVISTA') && first.venc && doc.criacao) {
+        const days = Math.round((Date.parse(first.venc) - Date.parse(doc.criacao)) / 86400000);
+        if (days > 0) {
+          const opts = [7, 14, 21, 28, 30, 45, 60, 90];
+          const best = opts.reduce((a, b) => Math.abs(b - days) < Math.abs(a - days) ? b : a);
+          termo = `${best} Dias`;
+        }
+      }
+      return { forma: pdfMapPayMethod(main.desc), parc: Math.max(...same.map(p => p.parc), 1), termo };
+    }
+
+    function preparePdfImportDoc(doc) {
+      const bySku = new Map(database.prod.map(p => [String(p.sku).trim().toUpperCase(), p]));
+      doc.itens.forEach(it => { it.prod = bySku.get(it.sku) || null; });
+
+      const gross = it => it.q * it.pu;
+      const net = it => gross(it) - (it.desc_r || 0);
+      const sumNet = doc.itens.reduce((a, it) => a + net(it), 0);
+      doc.itens.forEach(it => {
+        const extra = sumNet > 0 ? doc.desconto * net(it) / sumNet : 0;
+        const g = gross(it);
+        it.d = g > 0 ? Math.round(((it.desc_r || 0) + extra) / g * 1e8) / 1e6 : 0;
+      });
+
+      const calc = doc.itens.reduce((a, it) => a + gross(it) * (1 - it.d / 100), 0) + doc.frete + doc.outros;
+      doc.totalCalc = Math.round(calc * 100) / 100;
+      doc.totalConfere = doc.totalPdf === null || Math.abs(doc.totalCalc - doc.totalPdf) < 0.02;
+
+      const target = pdfNorm(doc.cliente);
+      const fant = pdfNorm(doc.fantasia);
+      doc.clienteExato = database.cli.find(c => {
+        const n = pdfNorm(c.nome), f = pdfNorm(c.fantasia);
+        return n && (n === target || (fant && n === fant) || (f && (f === target || (fant && f === fant))));
+      }) || null;
+      let cands = searchClients(database.cli, doc.cliente);
+      if (!cands.length) {
+        const longest = doc.cliente.split(/\s+/).sort((a, b) => b.length - a.length)[0] || '';
+        if (longest.length >= 3) cands = searchClients(database.cli, longest);
+      }
+      doc.candidatos = cands.filter(c => c !== doc.clienteExato).slice(0, 8);
+      doc.pay = pdfPayInfo(doc);
+      doc.alvo = pdfImportTarget;
+      return doc;
+    }
+
+    async function nextPdfImport() {
+      const file = pdfImportQueue.shift();
+      if (!file) { pdfImportDoc = null; return; }
+      try {
+        const lines = await pdfToLines(file);
+        const doc = parseOrderPdfLines(lines);
+        doc.arquivo = file.name;
+        if (!doc.itens.length) {
+          showToast(`Não encontrei itens em "${file.name}". Use o PDF no modelo Pedido de Venda.`);
+          return nextPdfImport();
+        }
+        pdfImportDoc = preparePdfImportDoc(doc);
+        renderPdfImportPreview();
+      } catch (err) {
+        console.error(err);
+        showToast(err && err.message ? err.message : `Erro ao ler "${file.name}".`);
+        return nextPdfImport();
+      }
+    }
+
+    function pdfNumberTaken(n, target) {
+      return database.orc.some(o => o.n === n) || (target === 'ped' && database.ped.some(p => p.n === n));
+    }
+
+    function renderPdfImportPreview() {
+      const doc = pdfImportDoc;
+      if (!doc) return;
+      const target = doc.alvo;
+      const nextNum = nextSeqPreview();
+      const padded = String(onlyDigits(doc.numero)).padStart(4, '0');
+      const startNum = doc.numero && !pdfNumberTaken(padded, target) ? padded : nextNum;
+      const missing = doc.itens.filter(i => !i.prod);
+      const blocked = isAdmin() ? [] : doc.itens.filter(i => i.prod && !checkPriceLock(i.prod.id, i.pu).ok);
+      const payMethods = ['CHEQUE', 'BOLETO', 'PIX', 'DINHEIRO', 'CARTÃO DE CRÉDITO', 'CARTÃO DE DÉBITO', 'A PRAZO / CARTEIRA', 'TRANSFERÊNCIA'];
+
+      const warns = [];
+      if (doc.numero && startNum !== padded) warns.push(`O número ${escapeHtml(padded)} já existe no sistema; sugeri ${escapeHtml(startNum)}. Você pode trocar abaixo.`);
+      if (missing.length) warns.push(`<b>${missing.length} produto(s) não estão no catálogo</b> e serão ignorados: ${missing.map(i => escapeHtml(i.sku)).join(', ')}.`);
+      if (!doc.totalConfere) warns.push(`O total calculado (${formatCurrency(doc.totalCalc)}) não bate com o do PDF (${formatCurrency(doc.totalPdf)}). Confira os itens.`);
+      if (blocked.length) warns.push(`Preço fora do limite de ±${formatNumber(priceLockPct(), 1)}% do catálogo (só o administrador importa): ${blocked.map(i => escapeHtml(i.sku)).join(', ')}.`);
+      if (!doc.clienteExato) warns.push(`Cliente “${escapeHtml(doc.cliente)}” não encontrado com o mesmo nome. Escolha um da lista ou cadastre como novo (sem CNPJ/CPF; complete depois em Clientes).`);
+
+      const cliOptions = [
+        doc.clienteExato ? `<option value="${doc.clienteExato.id}" selected>✓ ${escapeHtml(doc.clienteExato.nome)}${doc.clienteExato.doc ? ' (' + escapeHtml(doc.clienteExato.doc) + ')' : ''}</option>` : '',
+        `<option value="__new__" ${doc.clienteExato ? '' : 'selected'}>➕ Cadastrar novo: ${escapeHtml(doc.cliente)}</option>`,
+        ...doc.candidatos.map(c => `<option value="${c.id}">${escapeHtml(c.nome)}${c.cid ? ' — ' + escapeHtml(c.cid) : ''}</option>`)
+      ].join('');
+
+
+      openModal(`
+        <h3>Importar PDF — ${doc.titulo === 'ORCAMENTO' ? 'Orçamento' : 'Pedido'} ${escapeHtml(doc.numero || '')}</h3>
+        <p class="mut" style="font-size:12.5px;margin:4px 0 12px">${escapeHtml(doc.arquivo)}${pdfImportQueue.length ? ` · mais ${pdfImportQueue.length} PDF(s) na fila` : ''}. Confira e confirme.</p>
+        ${warns.length ? `<div style="background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin-bottom:12px">${warns.map(w => `<div>⚠ ${w}</div>`).join('')}</div>` : ''}
+        <div class="form-layout">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div>
+              <label>Importar como</label>
+              <select id="pdfimp_target" onchange="pdfImportDoc.alvo=this.value">
+                <option value="orc" ${target === 'orc' ? 'selected' : ''}>Orçamento</option>
+                <option value="ped" ${target === 'ped' ? 'selected' : ''}>Pedido</option>
+              </select>
+            </div>
+            <div>
+              <label>Número</label>
+              <input id="pdfimp_n" inputmode="numeric" value="${escapeHtml(startNum)}">
+            </div>
+          </div>
+          <label>Cliente</label>
+          <select id="pdfimp_cli">${cliOptions}</select>
+          <label>Vendedor</label>
+          <select id="pdfimp_seller">${sellerSelectOptions(doc.vendedor)}</select>
+        </div>
+
+        <h4 style="margin:16px 0 8px">Itens (${doc.itens.length})</h4>
+        <div style="border:1px solid var(--bd);border-radius:12px;background:var(--card);margin-bottom:14px">
+          ${doc.itens.map(i => `
+            <div style="padding:10px 12px;border-bottom:1px solid var(--bd)">
+              <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
+                <span><span class="sku-pill">${escapeHtml(i.sku)}</span> ${i.prod ? '' : '<b style="color:var(--bad);font-size:12px">não cadastrado</b>'}</span>
+                <b>${formatCurrency(i.q * i.pu * (1 - i.d / 100))}</b>
+              </div>
+              <div class="mut" style="font-size:12.5px;margin-top:3px">${escapeHtml(i.prod ? i.prod.nome : i.desc)}</div>
+              <div class="mut" style="font-size:12.5px">${formatNumber(i.q, i.q % 1 === 0 ? 0 : 3)} × ${formatCurrency(i.pu)}${i.d > 0 ? ` · desc. ${formatNumber(i.d, 2)}%` : ''}</div>
+            </div>`).join('')}
+        </div>
+
+        <div style="background:var(--sunk);border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.7;margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between"><span>Itens</span><b>${formatCurrency(doc.totalItens ?? doc.itens.reduce((a, i) => a + i.q * i.pu, 0))}</b></div>
+          ${doc.desconto ? `<div style="display:flex;justify-content:space-between"><span>Desconto (dividido entre os itens)</span><b>− ${formatCurrency(doc.desconto)}</b></div>` : ''}
+          ${doc.frete ? `<div style="display:flex;justify-content:space-between"><span>Frete</span><b>${formatCurrency(doc.frete)}</b></div>` : ''}
+          ${doc.outros ? `<div style="display:flex;justify-content:space-between"><span>Outros</span><b>${formatCurrency(doc.outros)}</b></div>` : ''}
+          <div style="display:flex;justify-content:space-between;font-size:15px"><span>Total</span><b>${formatCurrency(doc.totalCalc)}</b></div>
+        </div>
+
+        <div class="form-layout">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div>
+              <label>Forma de pagamento</label>
+              <select id="pdfimp_pay">${payMethods.map(m => `<option value="${m}" ${m === (doc.pay.forma || 'CHEQUE') ? 'selected' : ''}>${m}</option>`).join('')}</select>
+            </div>
+            <div>
+              <label>Prazo</label>
+              <select id="pdfimp_terms">${termOptionsHtml(doc.pay.termo)}</select>
+            </div>
+            <div>
+              <label>Parcelas</label>
+              <select id="pdfimp_parc">${[1, 2, 3, 4, 5, 6, 8, 10, 12].map(n => `<option value="${n}" ${n === doc.pay.parc ? 'selected' : ''}>${String(n).padStart(2, '0')}x</option>`).join('')}</select>
+            </div>
+            <div>
+              <label>Data de entrega</label>
+              <input id="pdfimp_entrega" type="date" value="${escapeHtml(doc.entrega || todayIso())}">
+            </div>
+          </div>
+          <label>Observações</label>
+          <input id="pdfimp_obs" value="${escapeHtml(doc.obs || '')}" placeholder="Observações">
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:18px;flex-wrap:wrap">
+          <button onclick="confirmPdfImport()">${icon('download')} Importar</button>
+          ${pdfImportQueue.length ? `<button class="secondary" onclick="skipPdfImport()">Pular este</button>` : ''}
+          <button class="secondary" onclick="cancelPdfImport()">Cancelar</button>
+        </div>
+      `);
+    }
+
+    function nextSeqPreview() {
+      let n = (Number(database.seq.o) || 0) + 1;
+      while (pdfNumberTaken(String(n).padStart(4, '0'), 'ped')) n++;
+      return String(n).padStart(4, '0');
+    }
+
+    function skipPdfImport() { closeModal(); nextPdfImport(); }
+    function cancelPdfImport() { pdfImportQueue = []; pdfImportDoc = null; closeModal(); }
+
+    async function confirmPdfImport() {
+      const doc = pdfImportDoc;
+      if (!doc) return;
+      const target = getVal('pdfimp_target') === 'ped' ? 'ped' : 'orc';
+      const digits = onlyDigits(getVal('pdfimp_n'));
+      if (!digits) return showToast('Informe o número.');
+      const n = digits.padStart(4, '0');
+      if (pdfNumberTaken(n, target)) return showToast(`O número ${n} já está em uso. Escolha outro.`);
+
+      const okItems = doc.itens.filter(i => i.prod);
+      if (!okItems.length) return showToast('Nenhum item do PDF existe no catálogo.');
+      if (!isAdmin()) {
+        const bad = okItems.find(i => !checkPriceLock(i.prod.id, i.pu).ok);
+        if (bad) return showToast(checkPriceLock(bad.prod.id, bad.pu).msg);
+      }
+
+      const sellerName = (getVal('pdfimp_seller') || '').trim() || currentUser.nome;
+      let client;
+      const cliSel = getVal('pdfimp_cli');
+      if (cliSel === '__new__') {
+        client = {
+          id: nextId(), codSis: '', tipo: 'J', nome: doc.cliente, fantasia: doc.fantasia || '', doc: '', ie: '', email: '',
+          tel: doc.telefone || '', cep: doc.end.cep || '', log: doc.end.log || '', num: doc.end.num || '', comp: '',
+          bairro: doc.end.bairro || '', cid: doc.end.cid || 'Alfenas', uf: doc.end.uf || 'MG',
+          vend: currentUser.id, vendNome: sellerName, ativo: 1
+        };
+        database.cli.push(client);
+        addAuditLog(`Cliente ${client.nome} criado pela importação de PDF`);
+      } else {
+        client = database.cli.find(c => c.id === cliSel);
+      }
+      if (!client) return showToast('Escolha o cliente.');
+
+      let created = Date.now();
+      if (doc.criacao) {
+        const [y, m, d] = doc.criacao.split('-').map(Number);
+        created = new Date(y, m - 1, d, 12, 0, 0).getTime();
+      }
+
+      const quote = {
+        id: nextId(),
+        n,
+        cli: client.id,
+        vend: currentUser.role === 'vendedor' ? currentUser.id : (client.vend || currentUser.id),
+        vendNome: sellerName,
+        data: created,
+        dataEntrega: getVal('pdfimp_entrega') || doc.entrega || todayIso(),
+        itens: okItems.map(i => ({ p: i.prod.id, q: i.q, pu: i.pu, d: i.d })),
+        frete: doc.frete || 0,
+        outros: doc.outros || 0,
+        parc: Number(getVal('pdfimp_parc')) || 1,
+        formaPag: getVal('pdfimp_pay') || 'CHEQUE',
+        condPag: getVal('pdfimp_terms') || 'À Vista',
+        obs: getVal('pdfimp_obs') || '',
+        st: target === 'ped' ? 'Aprovado pelo cliente' : 'Rascunho',
+        ped: null,
+        hist: [[Date.now(), currentUser.nome, `Importado de PDF (${doc.arquivo})`]]
+      };
+
+      database.orc.push(quote);
+      const seqNum = Number(n);
+      if (Number.isFinite(seqNum) && seqNum > (Number(database.seq.o) || 0)) database.seq.o = seqNum;
+      addAuditLog(`PDF importado: ${target === 'ped' ? 'pedido' : 'orçamento'} ${n} (${client.nome})`);
+
+      let order = null;
+      if (target === 'ped') {
+        order = convertToOrder(quote.id);
+        if (order) {
+          order.data = created;
+          order.hist = [[Date.now(), currentUser.nome, `Importado de PDF (${doc.arquivo})`]];
+        }
+      }
+
+      await saveData();
+      closeModal();
+      refreshView();
+      showToast(`${target === 'ped' ? 'Pedido' : 'Orçamento'} ${n} importado com ${okItems.length} item(ns).`);
+      pdfImportDoc = null;
+      if (pdfImportQueue.length) setTimeout(nextPdfImport, 400);
+    }
+
+    function fitPrintSheet() {
+      const sheet = document.querySelector('#print-overlay .print-sheet');
+      if (!sheet) return;
+      const avail = window.innerWidth - 20;
+      if (avail >= 820) {
+        sheet.style.zoom = '';
+        sheet.style.width = '';
+        sheet.style.maxWidth = '';
+        return;
+      }
+      sheet.style.width = '820px';
+      sheet.style.maxWidth = 'none';
+      sheet.style.zoom = String(Math.max(0.3, avail / 820));
+    }
+    window.addEventListener('resize', fitPrintSheet);
+
+    setInterval(enforceSessionExpiry, 30000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) enforceSessionExpiry(); });
+    window.addEventListener('focus', enforceSessionExpiry);
+    window.addEventListener('pageshow', enforceSessionExpiry);
+
     const CABLE_PREFIX = { VM: 'vm', PT: 'pt', AZ: 'az', VD: 'vd', BR: 'br', AM: 'am' };
     const CABLE_NAME = { vm: 'vermelho', pt: 'preto', az: 'azul', vd: 'verde', br: 'branco', am: 'amarelo' };
 
@@ -7676,6 +8288,7 @@
 
       restoreSession();
       renderApp();
+      if (sessionExpiredOnLoad) showToast('Por segurança, o login vale por 24 horas. Entre novamente.');
       if (servidorFalhou) showServerBanner(AVISO_SERVIDOR);
     })();
   </script>
