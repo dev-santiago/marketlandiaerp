@@ -1,0 +1,13 @@
+module.exports = (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.status(200).send(JSON.stringify([
+    {
+      relation: ["delegate_permission/common.handle_all_urls"],
+      target: {
+        namespace: "android_app",
+        package_name: "https://marketlandiaerp.vercel.app",
+        sha256_cert_fingerprints: ["C2:28:87:9F:35:8B:9C:F0:AE:2E:63:DD:86:66:01:9B:F0:67:BE:0A:29:86:35:22:65:30:4F:D1:48:A3:09:11"]
+      }
+    }
+  ]));
+};
