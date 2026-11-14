@@ -4,5 +4,8 @@
     "api/*.js": {
       "maxDuration": 30
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/.well-known/assetlinks.json", "destination": "/api/assetlinks" }
+  ]
 }
